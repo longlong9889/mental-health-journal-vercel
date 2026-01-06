@@ -178,7 +178,7 @@ function App() {
                 text: e.journalText.substring(0, 100)
             }));
 
-            const response = await fetch(`${process.env.REACT_APP_API_URL}/api/ai-insights`, {
+            const response = await fetch('http://localhost:3001/api/ai-insights', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -224,7 +224,7 @@ function App() {
                     .map(id => activities.find(a => a.id === id)?.label)
                     .join(', ') || 'None';
 
-                const response = await fetch(`${process.env.REACT_APP_API_URL}/api/ai-insights`, {
+                const response = await fetch('http://localhost:3001/api/ai-insights', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -343,6 +343,172 @@ function App() {
             }
         });
         return Object.entries(activityMoods).sort((a, b) => b[1].avgMood - a[1].avgMood);
+    };
+
+    // Smart Insights Generator
+    const getSmartInsights = () => {
+        if (entries.length < 3) return []; // Need at least 3 entries for meaningful insights
+
+        const insights = [];
+        const avgMood = entries.reduce((sum, e) => sum + e.mood, 0) / entries.length;
+
+        // 1. Activity Impact Analysis
+        activities.forEach(activity => {
+            const withActivity = entries.filter(e => e.activities.includes(activity.id));
+            const withoutActivity = entries.filter(e => !e.activities.includes(activity.id));
+
+            if (withActivity.length >= 2 && withoutActivity.length >= 2) {
+                const avgWith = withActivity.reduce((sum, e) => sum + e.mood, 0) / withActivity.length;
+                const avgWithout = withoutActivity.reduce((sum, e) => sum + e.mood, 0) / withoutActivity.length;
+                const difference = avgWith - avgWithout;
+
+                if (Math.abs(difference) >= 0.5) {
+                    const percentChange = Math.abs((difference / avgWithout) * 100).toFixed(0);
+                    if (difference > 0) {
+                        insights.push({
+                            type: 'positive',
+                            icon: activity.icon,
+                            title: `${activity.label} boosts your mood`,
+                            text: `You feel ${percentChange}% better on days you log "${activity.label}" (${avgWith.toFixed(1)} vs ${avgWithout.toFixed(1)} avg mood)`
+                        });
+                    } else {
+                        insights.push({
+                            type: 'neutral',
+                            icon: activity.icon,
+                            title: `${activity.label} pattern detected`,
+                            text: `Your mood averages ${avgWith.toFixed(1)} on "${activity.label}" days vs ${avgWithout.toFixed(1)} on other days`
+                        });
+                    }
+                }
+            }
+        });
+
+        // 2. Day of Week Analysis
+        const dayMoods = {};
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+        entries.forEach(e => {
+            const day = new Date(e.timestamp).getDay();
+            if (!dayMoods[day]) dayMoods[day] = [];
+            dayMoods[day].push(e.mood);
+        });
+
+        let bestDay = null;
+        let bestDayAvg = 0;
+        let worstDay = null;
+        let worstDayAvg = 5;
+
+        Object.entries(dayMoods).forEach(([day, moods]) => {
+            if (moods.length >= 2) {
+                const avg = moods.reduce((a, b) => a + b, 0) / moods.length;
+                if (avg > bestDayAvg) {
+                    bestDayAvg = avg;
+                    bestDay = parseInt(day);
+                }
+                if (avg < worstDayAvg) {
+                    worstDayAvg = avg;
+                    worstDay = parseInt(day);
+                }
+            }
+        });
+
+        if (bestDay !== null && bestDayAvg - avgMood >= 0.3) {
+            insights.push({
+                type: 'positive',
+                icon: '📅',
+                title: `${dayNames[bestDay]}s are your best days`,
+                text: `Your average mood on ${dayNames[bestDay]}s is ${bestDayAvg.toFixed(1)}, higher than your overall average of ${avgMood.toFixed(1)}`
+            });
+        }
+
+        if (worstDay !== null && avgMood - worstDayAvg >= 0.3 && worstDay !== bestDay) {
+            insights.push({
+                type: 'attention',
+                icon: '📉',
+                title: `${dayNames[worstDay]}s tend to be harder`,
+                text: `Your mood dips to ${worstDayAvg.toFixed(1)} on ${dayNames[worstDay]}s. Consider planning self-care for these days.`
+            });
+        }
+
+        // 3. Streak Analysis
+        let currentStreak = 0;
+        let bestStreak = 0;
+
+        const sortedEntries = [...entries].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        sortedEntries.forEach(e => {
+            if (e.mood >= 4) {
+                currentStreak++;
+                bestStreak = Math.max(bestStreak, currentStreak);
+            } else {
+                currentStreak = 0;
+            }
+        });
+
+        if (bestStreak >= 3) {
+            insights.push({
+                type: 'positive',
+                icon: '🔥',
+                title: `${bestStreak}-day good mood streak!`,
+                text: `You've had ${bestStreak} consecutive days with good or amazing mood. Keep it up!`
+            });
+        }
+
+        // 4. Recent Trend Analysis
+        if (entries.length >= 5) {
+            const recent = entries.slice(0, 5);
+            const older = entries.slice(5, 10);
+
+            if (older.length >= 3) {
+                const recentAvg = recent.reduce((sum, e) => sum + e.mood, 0) / recent.length;
+                const olderAvg = older.reduce((sum, e) => sum + e.mood, 0) / older.length;
+                const trend = recentAvg - olderAvg;
+
+                if (trend >= 0.5) {
+                    insights.push({
+                        type: 'positive',
+                        icon: '📈',
+                        title: 'Your mood is improving!',
+                        text: `Your recent entries average ${recentAvg.toFixed(1)} compared to ${olderAvg.toFixed(1)} before. Great progress!`
+                    });
+                } else if (trend <= -0.5) {
+                    insights.push({
+                        type: 'attention',
+                        icon: '💙',
+                        title: 'Recent dip detected',
+                        text: `Your recent mood (${recentAvg.toFixed(1)}) is lower than before (${olderAvg.toFixed(1)}). Remember to be gentle with yourself.`
+                    });
+                }
+            }
+        }
+
+        // 5. Activity Combination Insight
+        if (entries.length >= 5) {
+            const multiActivityEntries = entries.filter(e => e.activities.length >= 2);
+            const singleActivityEntries = entries.filter(e => e.activities.length === 1);
+
+            if (multiActivityEntries.length >= 2 && singleActivityEntries.length >= 2) {
+                const multiAvg = multiActivityEntries.reduce((sum, e) => sum + e.mood, 0) / multiActivityEntries.length;
+                const singleAvg = singleActivityEntries.reduce((sum, e) => sum + e.mood, 0) / singleActivityEntries.length;
+
+                if (multiAvg - singleAvg >= 0.5) {
+                    insights.push({
+                        type: 'positive',
+                        icon: '✨',
+                        title: 'Multiple activities help',
+                        text: `Days with 2+ activities average ${multiAvg.toFixed(1)} mood vs ${singleAvg.toFixed(1)} with just one. Variety matters!`
+                    });
+                }
+            }
+        }
+
+        // Return top 4 insights, prioritizing positive ones
+        return insights
+            .sort((a, b) => {
+                const priority = { positive: 0, neutral: 1, attention: 2 };
+                return priority[a.type] - priority[b.type];
+            })
+            .slice(0, 4);
     };
 
     const formatDate = (timestamp) => {
@@ -849,6 +1015,41 @@ function App() {
                                                     </p>
                                                 </div>
                                             </div>
+
+                                            {/* Smart Insights */}
+                                            {getSmartInsights().length > 0 && (
+                                                <div>
+                                                    <h3 className="text-sm tracking-widest uppercase text-stone-400 mb-6">
+                                                        Personalized Insights
+                                                    </h3>
+                                                    <div className="grid gap-4">
+                                                        {getSmartInsights().map((insight, index) => (
+                                                            <div
+                                                                key={index}
+                                                                className={`p-4 rounded-sm border-l-4 ${
+                                                                    insight.type === 'positive'
+                                                                        ? 'bg-green-50 border-green-400'
+                                                                        : insight.type === 'attention'
+                                                                            ? 'bg-amber-50 border-amber-400'
+                                                                            : 'bg-stone-50 border-stone-400'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-start gap-3">
+                                                                    <span className="text-xl">{insight.icon}</span>
+                                                                    <div>
+                                                                        <h4 className="font-medium text-stone-800 mb-1">
+                                                                            {insight.title}
+                                                                        </h4>
+                                                                        <p className="text-sm text-stone-600">
+                                                                            {insight.text}
+                                                                        </p>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             {/* Chart */}
                                             {entries.length > 1 && (
